@@ -34,5 +34,8 @@
     "pcm"
   ],
   "repository": "github:audiojs/assert",
-  "license": "MIT"
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
 }
