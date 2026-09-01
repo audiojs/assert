@@ -1,7 +1,9 @@
-// @audio/assert — audio assertion helpers for CI.
-// Every assertion throws an Error with a precise message on failure and
-// returns the measured value on success. No runner integration: it plugs
-// into node:test, tape, tap, vitest, jest, mocha as-is.
+// @audio/assert — audio assertions for CI.
+// Every function measures; given an expectation it also asserts, throwing an
+// Error with a precise message on failure and returning the measured value on
+// success. No runner integration: a thrown Error is a failing test in
+// node:test, bun:test, Deno.test, tape, tap, ava, uvu, mocha, jasmine, jest,
+// and vitest alike.
 
 // --- input normalization -----------------------------------------------
 // Accepts anything AudioBuffer-shaped (numberOfChannels, sampleRate, length,
@@ -23,7 +25,7 @@ function channelsOf(input) {
 
 // Pools all channels into one array, channel by channel. Used by measures
 // that report a single overall number (peak, rms, hash). Assertions where a
-// per-channel location matters (clipping, dc offset, matches) walk channels
+// per-channel location matters (unclipped, dc, matches) walk channels
 // separately instead.
 function flatten(input) {
   let chans = channelsOf(input)
@@ -45,34 +47,24 @@ function fail(msg) { throw new Error(msg) }
 
 // --- peak / rms ----------------------------------------------------------
 
-export function peak(input) {
+export function peak(input, expected, tol = 1e-4) {
   let data = flatten(input)
   let max = 0
   for (let i = 0; i < data.length; i++) { let a = Math.abs(data[i]); if (a > max) max = a }
+  if (expected != null && Math.abs(max - expected) > tol)
+    fail(`peak ${max.toFixed(6)} != expected ${expected} (tol ${tol})`)
   return max
-}
-
-export function assertPeak(input, expected, tol = 1e-4) {
-  let measured = peak(input)
-  if (Math.abs(measured - expected) > tol)
-    fail(`peak ${measured.toFixed(6)} != expected ${expected} (tol ${tol})`)
-  return measured
 }
 
 // RMS: sqrt(mean(x^2)), the standard measure of a signal's average power
 // (AES17 / IEC 61606). Pooled across channels for a multi-channel buffer —
 // pass buffer.getChannelData(ch) directly to measure one channel.
-export function rms(input) {
+export function rms(input, expected, tol = 1e-4) {
   let data = flatten(input)
-  if (!data.length) return 0
   let sum = 0
   for (let i = 0; i < data.length; i++) sum += data[i] * data[i]
-  return Math.sqrt(sum / data.length)
-}
-
-export function assertRms(input, expected, tol = 1e-4) {
-  let measured = rms(input)
-  if (Math.abs(measured - expected) > tol)
+  let measured = data.length ? Math.sqrt(sum / data.length) : 0
+  if (expected != null && Math.abs(measured - expected) > tol)
     fail(`rms ${measured.toFixed(6)} != expected ${expected} (tol ${tol})`)
   return measured
 }
@@ -83,7 +75,7 @@ export function assertRms(input, expected, tol = 1e-4) {
 // (6.02 * 16 + 1.76 dB, Widrow/Kollár quantization-noise formula), with a
 // few dB of headroom for dither and render rounding — a standard
 // "effectively silent" gate for CI.
-export function assertSilent(input, floorDb = -90) {
+export function silent(input, floorDb = -90) {
   let measured = peak(input)
   let measuredDb = dbfs(measured)
   if (measuredDb > floorDb)
@@ -94,7 +86,7 @@ export function assertSilent(input, floorDb = -90) {
 // -60 dBFS: comfortably above the -90 dBFS silence floor and well below
 // normal program level (-20..-6 dBFS), so it only trips on buffers with no
 // real content — an accidentally muted node or a zeroed graph.
-export function assertNotSilent(input, floorDb = -60) {
+export function audible(input, floorDb = -60) {
   let measured = rms(input)
   let measuredDb = dbfs(measured)
   if (measuredDb <= floorDb)
@@ -108,7 +100,7 @@ export function assertNotSilent(input, floorDb = -60) {
 // happens to touch it — a legitimate transient can graze full scale once.
 // Three consecutive samples at/above the limit is the common heuristic that
 // separates "one real peak sample" from "the waveform is being clamped."
-export function assertNoClipping(input, limit = 1) {
+export function unclipped(input, limit = 1) {
   let chans = channelsOf(input)
   const MIN_RUN = 3
   for (let c = 0; c < chans.length; c++) {
@@ -132,8 +124,9 @@ export function assertNoClipping(input, limit = 1) {
 // linear (~-40 dBFS as a level, though DC itself carries no spectral
 // energy) is tight enough to catch a stuck offset while tolerating render
 // and quantization noise. Checked per channel since a captured offset is
-// typically a per-channel hardware artifact.
-export function assertNoDcOffset(input, maxDc = 0.01) {
+// typically a per-channel hardware artifact. Returns the worst channel mean;
+// asserts only when maxDc is given.
+export function dc(input, maxDc) {
   let chans = channelsOf(input)
   let worst = 0
   for (let c = 0; c < chans.length; c++) {
@@ -142,7 +135,7 @@ export function assertNoDcOffset(input, maxDc = 0.01) {
     for (let i = 0; i < data.length; i++) sum += data[i]
     let mean = data.length ? sum / data.length : 0
     if (Math.abs(mean) > Math.abs(worst)) worst = mean
-    if (Math.abs(mean) > maxDc)
+    if (maxDc != null && Math.abs(mean) > maxDc)
       fail(`dc offset: channel ${c} mean ${mean.toFixed(6)} exceeds ${maxDc}`)
   }
   return worst
@@ -150,26 +143,26 @@ export function assertNoDcOffset(input, maxDc = 0.01) {
 
 // --- buffer shape --------------------------------------------------------
 
-export function assertDuration(buffer, seconds, tol = 1e-3) {
-  if (!isBufferLike(buffer)) fail('assertDuration expects an AudioBuffer-like object')
+export function duration(buffer, seconds, tol = 1e-3) {
+  if (!isBufferLike(buffer)) fail('duration expects an AudioBuffer-like object')
   let measured = buffer.duration
-  if (Math.abs(measured - seconds) > tol)
+  if (seconds != null && Math.abs(measured - seconds) > tol)
     fail(`duration ${measured}s != expected ${seconds}s (tol ${tol})`)
   return measured
 }
 
-export function assertChannels(buffer, count) {
-  if (!isBufferLike(buffer)) fail('assertChannels expects an AudioBuffer-like object')
+export function channels(buffer, count) {
+  if (!isBufferLike(buffer)) fail('channels expects an AudioBuffer-like object')
   let measured = buffer.numberOfChannels
-  if (measured !== count)
+  if (count != null && measured !== count)
     fail(`numberOfChannels ${measured} != expected ${count}`)
   return measured
 }
 
-export function assertSampleRate(buffer, rate) {
-  if (!isBufferLike(buffer)) fail('assertSampleRate expects an AudioBuffer-like object')
+export function sampleRate(buffer, rate) {
+  if (!isBufferLike(buffer)) fail('sampleRate expects an AudioBuffer-like object')
   let measured = buffer.sampleRate
-  if (measured !== rate)
+  if (rate != null && measured !== rate)
     fail(`sampleRate ${measured} != expected ${rate}`)
   return measured
 }
@@ -183,17 +176,24 @@ export function assertSampleRate(buffer, rate) {
 // even in the presence of harmonics — the same principle behind pitch
 // trackers like YIN (de Cheveigné & Kawahara, 2002). Operates on channel 0
 // for multi-channel input; pass getChannelData(ch) for a specific channel.
-export function dominantFrequency(input, sampleRate) {
-  if (!sampleRate) fail('dominantFrequency requires a sampleRate')
+//
+// Cents: 1200*log2(f1/f2), the standard logarithmic pitch-difference unit
+// (100 cents = 1 semitone, ISO 16:1975). Comparing in cents keeps the
+// tolerance musically meaningful across the range — a fixed Hz tolerance is
+// strict at 100 Hz and needlessly loose at 5000 Hz. 10 cents is below
+// typical human pitch-discrimination threshold (5-25 cents depending on
+// listener and register).
+export function frequency(input, rate, hz, tolCents = 10) {
+  if (!rate) fail('frequency requires a sampleRate')
   let data = channelsOf(input)[0]
   let n = data.length
 
   // Search range: 27.5 Hz (A0, the lowest standard musical pitch) to
   // 5000 Hz (above typical synthesized test tones), clamped to what the
   // buffer length can resolve.
-  let minLag = Math.max(2, Math.floor(sampleRate / 5000))
-  let maxLag = Math.min(n - 1, Math.floor(sampleRate / 27.5))
-  if (maxLag <= minLag) fail('dominantFrequency: buffer too short for autocorrelation')
+  let minLag = Math.max(2, Math.floor(rate / 5000))
+  let maxLag = Math.min(n - 1, Math.floor(rate / 27.5))
+  if (maxLag <= minLag) fail('frequency: buffer too short for autocorrelation')
 
   let corrAt = lag => {
     let sum = 0
@@ -214,28 +214,19 @@ export function dominantFrequency(input, sampleRate) {
   let y2 = bestLag < maxLag ? corrAt(bestLag + 1) : bestCorr
   let denom = y0 - 2 * y1 + y2
   let shift = denom !== 0 ? 0.5 * (y0 - y2) / denom : 0
-  let refinedLag = bestLag + Math.max(-1, Math.min(1, shift))
+  let measured = rate / (bestLag + Math.max(-1, Math.min(1, shift)))
 
-  return sampleRate / refinedLag
-}
-
-// Cents: 1200*log2(f1/f2), the standard logarithmic pitch-difference unit
-// (100 cents = 1 semitone, ISO 16:1975). Comparing in cents keeps the
-// tolerance musically meaningful across the range — a fixed Hz tolerance is
-// strict at 100 Hz and needlessly loose at 5000 Hz. 10 cents is below
-// typical human pitch-discrimination threshold (5-25 cents depending on
-// listener and register).
-export function assertFrequency(input, sampleRate, hz, tolCents = 10) {
-  let measured = dominantFrequency(input, sampleRate)
-  let cents = 1200 * Math.log2(measured / hz)
-  if (Math.abs(cents) > tolCents)
-    fail(`frequency ${measured.toFixed(2)} Hz (${cents.toFixed(1)} cents from ${hz} Hz) exceeds tolerance ${tolCents} cents`)
+  if (hz != null) {
+    let cents = 1200 * Math.log2(measured / hz)
+    if (Math.abs(cents) > tolCents)
+      fail(`frequency ${measured.toFixed(2)} Hz (${cents.toFixed(1)} cents from ${hz} Hz) exceeds tolerance ${tolCents} cents`)
+  }
   return measured
 }
 
 // --- regression ----------------------------------------------------------
 
-export function assertMatches(a, b, tol = 1e-4) {
+export function matches(a, b, tol = 1e-4) {
   let ca = channelsOf(a), cb = channelsOf(b)
   if (ca.length !== cb.length)
     fail(`channel count mismatch: ${ca.length} != ${cb.length}`)
@@ -265,7 +256,7 @@ const QUANT = 32768 // 2^15, 16-bit signed PCM full-scale steps
 const FNV_OFFSET = 0x811c9dc5
 const FNV_PRIME = 0x01000193
 
-export function hash(input) {
+export function hash(input, expected) {
   let data = flatten(input)
   let h = FNV_OFFSET
   for (let i = 0; i < data.length; i++) {
@@ -273,12 +264,8 @@ export function hash(input) {
     h ^= q & 0xff; h = Math.imul(h, FNV_PRIME)
     h ^= (q >> 8) & 0xff; h = Math.imul(h, FNV_PRIME)
   }
-  return (h >>> 0).toString(16).padStart(8, '0')
-}
-
-export function assertHash(input, expected) {
-  let measured = hash(input)
-  if (measured !== expected)
+  let measured = (h >>> 0).toString(16).padStart(8, '0')
+  if (expected != null && measured !== expected)
     fail(`hash ${measured} != expected ${expected}`)
   return measured
 }

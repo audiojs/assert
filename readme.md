@@ -1,6 +1,6 @@
 # @audio/assert
 
-Audio assertion helpers for CI. Measure and assert peak, RMS, silence, clipping, DC offset, duration, channels, sample rate, pitch, sample-wise regressions, and content hashes on any `AudioBuffer`-like object or raw `Float32Array`/`number[]` samples.
+Audio assertions for CI. Measure and assert peak, RMS, silence, clipping, DC offset, duration, channels, sample rate, pitch, sample-wise regressions, and content hashes on any `AudioBuffer`-like object or raw `Float32Array`/`number[]` samples.
 
 ```
 npm install @audio/assert
@@ -8,36 +8,50 @@ npm install @audio/assert
 
 ## Use
 
-Every assertion **throws an `Error` with a precise message on failure and returns the measured value on success**. There is no runner integration to write — a thrown `Error` is exactly what `node:test`, `tape`, `tap`, `vitest`, `jest`, and `mocha` already expect from a failing assertion, so the same call works verbatim in all of them.
+Every function **measures** — and given an expectation it also **asserts**, throwing an `Error` with a precise message on failure and returning the measured value on success:
 
 ```js
-import { assertFrequency, assertSilent, assertNoClipping } from '@audio/assert'
+import { frequency, silent, unclipped, peak } from '@audio/assert'
 
-assertFrequency(sine440, 44100, 440)       // → 440.01 (measured Hz) or throws
-assertSilent(tailSamples)                  // → 0.0000012 or throws "not silent: ..."
-assertNoClipping(rendered)                 // → peak level or throws "clipping: channel 0, samples 812-819 ..."
+frequency(buffer, 44100)          // → 440.01 (measured Hz)
+frequency(buffer, 44100, 440)     // → 440.01, or throws "frequency 452.31 Hz (47.9 cents from 440 Hz)..."
+silent(tail)                      // → 0.0000012, or throws "not silent: peak -52.1 dBFS..."
+unclipped(mix)                    // → 0.98, or throws "clipping: channel 0, samples 812-819..."
+peak(render, 0.25, 1e-2)          // → 0.249, or throws
 ```
 
-### With `node:test`
+## Test runners
+
+A thrown `Error` is a failing test everywhere, so there is no integration layer: the same call works verbatim under `node:test`, `bun:test`, `Deno.test`, [tape](https://github.com/tape-testing/tape), [tap](https://node-tap.org), [ava](https://github.com/avajs/ava), [uvu](https://github.com/lukeed/uvu), mocha, jasmine, jest, and vitest — or in a bare `node script.js` with no runner at all.
 
 ```js
+// node:test
 import test from 'node:test'
-import { assertFrequency } from '@audio/assert'
+import { frequency } from '@audio/assert'
 
 test('oscillator renders 440 Hz', () => {
-  assertFrequency(buffer, ctx.sampleRate, 440)
+  frequency(buffer, ctx.sampleRate, 440)
 })
 ```
 
-### With `tape`
-
 ```js
+// tape
 import test from 'tape'
-import { assertFrequency } from '@audio/assert'
+import { frequency } from '@audio/assert'
 
 test('oscillator renders 440 Hz', t => {
-  t.doesNotThrow(() => assertFrequency(buffer, ctx.sampleRate, 440))
+  t.doesNotThrow(() => frequency(buffer, ctx.sampleRate, 440))
   t.end()
+})
+```
+
+```js
+// ava
+import test from 'ava'
+import { frequency } from '@audio/assert'
+
+test('oscillator renders 440 Hz', t => {
+  t.notThrows(() => frequency(buffer, ctx.sampleRate, 440))
 })
 ```
 
@@ -47,7 +61,7 @@ test('oscillator renders 440 Hz', t => {
 
 ```js
 import { OfflineAudioContext } from 'web-audio-api'
-import { assertPeak, assertFrequency, assertNoClipping, assertNoDcOffset } from '@audio/assert'
+import { frequency, peak, unclipped, dc } from '@audio/assert'
 
 let ctx = new OfflineAudioContext(1, 44100, 44100)
 let osc = ctx.createOscillator()
@@ -57,46 +71,46 @@ osc.start()
 
 let buffer = await ctx.startRendering()
 
-assertFrequency(buffer, ctx.sampleRate, 440)
-assertNoClipping(buffer)
-assertNoDcOffset(buffer)
-assertPeak(buffer, 1, 1e-2)
+frequency(buffer, ctx.sampleRate, 440)
+unclipped(buffer)
+dc(buffer, 0.01)
+peak(buffer, 1, 1e-2)
 ```
 
 ## API
 
-Input is either an `AudioBuffer`-like object (`numberOfChannels`, `sampleRate`, `length`, `duration`, `getChannelData(ch)`) or a raw `Float32Array`/`number[]`, treated as a single channel. Multi-channel measures that report one overall number (`peak`, `rms`, `hash`) pool all channels; measures where a location matters (`assertNoClipping`, `assertNoDcOffset`, `assertMatches`) report the specific channel.
+Input is either an `AudioBuffer`-like object (`numberOfChannels`, `sampleRate`, `length`, `duration`, `getChannelData(ch)`) or a raw `Float32Array`/`number[]`, treated as a single channel. Multi-channel measures that report one overall number (`peak`, `rms`, `hash`) pool all channels; measures where a location matters (`unclipped`, `dc`, `matches`) report the specific channel.
 
-#### `peak(input) → number` / `assertPeak(input, expected, tol=1e-4)`
+#### `peak(input, expected?, tol=1e-4) → number`
 Absolute sample maximum.
 
-#### `rms(input) → number` / `assertRms(input, expected, tol=1e-4)`
+#### `rms(input, expected?, tol=1e-4) → number`
 `sqrt(mean(x²))`, the standard average-power measure (AES17 / IEC 61606).
 
-#### `assertSilent(input, floorDb=-90)`
-Fails if any sample's peak level exceeds `floorDb`. -90 dBFS sits below 16-bit PCM's ~-96 dBFS theoretical noise floor with headroom for dither/render rounding.
+#### `silent(input, floorDb=-90) → number`
+Throws if any sample's peak level exceeds `floorDb`. -90 dBFS sits below 16-bit PCM's ~-96 dBFS theoretical noise floor with headroom for dither/render rounding.
 
-#### `assertNotSilent(input, floorDb=-60)`
-Fails if the signal's RMS level is at or below `floorDb` — catches an accidentally muted or zeroed graph. -60 dBFS is well below normal program level (-20..-6 dBFS) but well above the silence floor.
+#### `audible(input, floorDb=-60) → number`
+Throws if the signal's RMS level is at or below `floorDb` — catches an accidentally muted or zeroed graph. -60 dBFS is well below normal program level (-20..-6 dBFS) but well above the silence floor.
 
-#### `assertNoClipping(input, limit=1)`
-Fails on **true clipping**: 3+ *consecutive* samples at/above `limit`, not a single sample that legitimately grazes full scale. Reports the channel and sample range.
+#### `unclipped(input, limit=1) → number`
+Throws on **true clipping**: 3+ *consecutive* samples at/above `limit`, not a single sample that legitimately grazes full scale. Reports the channel and sample range; returns the peak.
 
-#### `assertNoDcOffset(input, maxDc=0.01)`
-Fails if any channel's sample mean exceeds `maxDc`.
+#### `dc(input, maxDc?) → number`
+Worst per-channel sample mean; throws when a channel's `|mean|` exceeds `maxDc` (0.01 is a sensible gate — tight enough to catch a stuck offset, loose enough for render noise).
 
-#### `assertDuration(buffer, seconds, tol=1e-3)` / `assertChannels(buffer, count)` / `assertSampleRate(buffer, rate)`
-Buffer-shape checks (require an `AudioBuffer`-like input).
+#### `duration(buffer, seconds?, tol=1e-3)` / `channels(buffer, count?)` / `sampleRate(buffer, rate?)`
+Buffer-shape measures (require an `AudioBuffer`-like input); each asserts when the expectation is given.
 
-#### `dominantFrequency(input, sampleRate) → Hz` / `assertFrequency(input, sampleRate, hz, tolCents=10)`
-Fundamental frequency via autocorrelation (with parabolic interpolation for sub-sample precision) — robust to harmonics and DC offset, unlike zero-crossing counting. Same principle as pitch trackers like YIN. Tolerance is in cents (100 cents = 1 semitone) so it stays musically meaningful across the frequency range.
+#### `frequency(input, sampleRate, hz?, tolCents=10) → number`
+Fundamental frequency via autocorrelation (with parabolic interpolation for sub-sample precision) — robust to harmonics and DC offset, unlike zero-crossing counting; the same principle as pitch trackers like YIN. Tolerance is in cents (100 cents = 1 semitone) so it stays musically meaningful across the frequency range.
 
-#### `assertMatches(a, b, tol=1e-4)`
-Sample-wise comparison for golden-audio regression tests. Reports the first diverging channel/index and the max error found.
+#### `matches(a, b, tol=1e-4) → number`
+Sample-wise comparison for golden-audio regression tests. Reports the first diverging channel/index; returns the max error.
 
-#### `hash(input) → string` / `assertHash(input, expected)`
+#### `hash(input, expected?) → string`
 Short deterministic content hash (FNV-1a) over samples quantized to 16-bit steps, so inaudible float noise between engines/platforms doesn't change the hash. Not cryptographic — for regression detection only.
 
 ## License
 
-MIT
+MIT, [ॐ](https://github.com/krishnized/license)

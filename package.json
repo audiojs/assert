@@ -1,6 +1,6 @@
 {
   "name": "@audio/assert",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Runner-agnostic audio assertion helpers for CI: peak, RMS, silence, clipping, DC offset, pitch, regression",
   "type": "module",
   "sideEffects": false,
