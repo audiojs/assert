@@ -32,7 +32,7 @@ test('oscillator renders 440 Hz', () => {
 ### With `tape`
 
 ```js
-const test = require('tape') // or: import test from 'tape'
+import test from 'tape'
 import { assertFrequency } from '@audio/assert'
 
 test('oscillator renders 440 Hz', t => {
