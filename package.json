@@ -1,0 +1,38 @@
+{
+  "name": "@audio/assert",
+  "version": "0.1.0",
+  "description": "Runner-agnostic audio assertion helpers for CI: peak, RMS, silence, clipping, DC offset, pitch, regression",
+  "type": "module",
+  "sideEffects": false,
+  "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": "./index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts"
+  ],
+  "scripts": {
+    "test": "node test.js"
+  },
+  "keywords": [
+    "audio",
+    "audiojs",
+    "assert",
+    "assertion",
+    "test",
+    "testing",
+    "ci",
+    "dsp",
+    "AudioBuffer",
+    "web-audio",
+    "waa",
+    "pcm"
+  ],
+  "repository": "github:audiojs/assert",
+  "license": "MIT"
+}
